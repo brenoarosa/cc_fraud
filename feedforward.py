@@ -3,25 +3,24 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torch.autograd import Variable
 import os
-import ipdb
 
-batch_size = 100
+batch_size = 2**10
 learning_rate = 0.001
-num_epochs = 24
+num_epochs = 10
 
-in_layer_size = 784
-out_layer_size = 10
-hidden_layer_sizes = [500]
+in_layer_size = 30
+out_layer_size = 1
+hidden_layer_sizes = [50, 50, 50]
+
+X_train = torch.load("./data/X_train.p")
+y_train = torch.load("./data/y_train.p")
+X_test = torch.load("./data/X_test.p")
+y_test = torch.load("./data/y_test.p")
 
 # MNIST Dataset
-train_dataset = dsets.MNIST(root='./data/mnist/',
-                            train=True,
-                            transform=transforms.ToTensor(),
-                            download=download_ds)
+train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
 
-test_dataset = dsets.MNIST(root='./data/mnist/',
-                           train=False,
-                           transform=transforms.ToTensor())
+test_dataset = torch.utils.data.TensorDataset(X_test, y_test)
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size,
@@ -31,7 +30,7 @@ test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                           batch_size=batch_size,
                                           shuffle=False)
 
-def get_loss_weights(target, num_classes=2):
+def get_loss_weights(target, num_classes=2, eps=1e-08):
     """
     Gets loss weights by counting target classes examples
 
@@ -40,14 +39,15 @@ def get_loss_weights(target, num_classes=2):
     So, each example will have weight equal to 1/num_classes * 1/class_count
     """
 
-    weights = torch.zeros(target.data.size())
+    weights = Variable(torch.zeros(target.data.size()))
 
     # TODO: check if torch.unique is implemented
     for cls in range(num_classes):
-        weights += 1 / (torch.sum(y == cls).data[0]) * (y == cls).type(torch.FloatTensor)
+        cls_members = (target.data == cls).type(torch.FloatTensor)
+        weights += Variable(1 / (torch.sum(cls_members) + eps) * cls_members)
 
     weights /= num_classes
-    return weights
+    return weights.data
 
 
 # Feed-Forward Neural Network Model (N hidden layer)
@@ -55,19 +55,18 @@ class FFN(nn.Module):
     def __init__(self, in_layer_size, hidden_layer_sizes, out_layer_size):
         super(FFN, self).__init__()
 
-        layer_sizes = [in_layer_size] + hidden_layer_sizes + [out_layer_size]
+        self.bn = nn.BatchNorm1d(in_layer_size)
+
         self.layers = []
+        layer_sizes = [in_layer_size] + hidden_layer_sizes + [out_layer_size]
 
+        # An proper implementation shoulden't add activation to the last
+        # layer as it could be computed in loss func for classifications
+        # and it isn't used in regressions
         for i in range(1, len(layer_sizes)):
-
-            # Dont add activation to last layer for the sake of generality
-            if i == (len(layer_sizes) - 1):
-                layer = nn.Linear(layer_sizes[i-1], layer_sizes[i])
-
-            else:
-                layer = nn.Sequential(
-                    nn.Linear(layer_sizes[i-1], layer_sizes[i]),
-                    nn.Sigmoid())
+            layer = nn.Sequential(
+                nn.Linear(layer_sizes[i-1], layer_sizes[i]),
+                nn.Sigmoid())
 
             layer_name = "layer{}".format(i)
             setattr(self, layer_name, layer)
@@ -75,18 +74,20 @@ class FFN(nn.Module):
         return
 
     def forward(self, x):
+        x = self.bn(x)
         for layer in self.layers:
             x = getattr(self, layer)(x)
         return x
 
 
 model = FFN(in_layer_size, hidden_layer_sizes, out_layer_size)
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-loss_func = nn.functional.binary_cross_entropy_with_logits
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+loss_func = nn.functional.binary_cross_entropy
 
 # Train the Model
 for epoch in range(num_epochs):
     for i, (X, y) in enumerate(train_loader):
+        y = y.type(torch.FloatTensor)
         # Convert torch tensor to Variable
         X = Variable(X)
         y = Variable(y)
@@ -96,10 +97,37 @@ for epoch in range(num_epochs):
         # Forward + Backward + Optimize
         optimizer.zero_grad()  # zero the gradient buffer
         outputs = model(X)
-        loss = loss_func(outputs, y, weights=batch_weights, size_avarage=False)
+        loss = loss_func(outputs, y, weight=batch_weights, size_average=False)
+
         loss.backward()
         optimizer.step()
 
-        if (i+1) % 100 == 0:
-            print ('Epoch [%d/%d], Step [%d/%d], Loss: %.4f'
-                   %(epoch+1, num_epochs, i+1, len(train_dataset)//batch_size, loss.data[0]))
+
+    confusion = torch.zeros([2, 2]).type(torch.LongTensor)
+    for i, (X, y) in enumerate(test_loader):
+        y = y.type(torch.LongTensor)
+        X = Variable(X)
+        y = Variable(y)
+
+        output = model(X)
+        pred = (output.data > .5).type(torch.LongTensor)
+
+        pred_correct = (pred == y.data)
+        pred_wrong = (pred != y.data)
+
+        fraud = (y.data == 1)
+        nonfraud = (y.data == 0)
+
+        tp = torch.sum(fraud * pred_correct)
+        tn = torch.sum(nonfraud * pred_correct)
+        fp = torch.sum(nonfraud * pred_wrong)
+        fn = torch.sum(fraud * pred_wrong)
+
+        confusion += torch.LongTensor([[tp, fn], [fp, tn]])
+
+    print("Epoch [{:d}/{:d}], loss: {:.4f}".format(epoch+1, num_epochs, loss.data[0]))
+
+print(confusion)
+
+import ipdb
+ipdb.set_trace()
