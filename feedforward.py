@@ -37,17 +37,27 @@ def get_loss_weights(target, num_classes=2, eps=1e-08):
     To help with skewed datasets we need to weight the gradient.
     Each class need to have the same influence in gradient.
     So, each example will have weight equal to 1/num_classes * 1/class_count
+
+    Usage:
+    >>> tensor = Variable(torch.FloatTensor([1, 0, 0, 0]))
+    >>> get_loss_weights(tensor)
+        0.5000
+        0.1667
+        0.1667
+        0.1667
+        [torch.FloatTensor of size 4]
     """
 
-    weights = Variable(torch.zeros(target.data.size()))
+    target = target.data.long()
 
-    # TODO: check if torch.unique is implemented
-    for cls in range(num_classes):
-        cls_members = (target.data == cls).type(torch.FloatTensor)
-        weights += Variable(1 / (torch.sum(cls_members) + eps) * cls_members)
+    target_onehot = torch.FloatTensor(target.size(0), num_classes)
+    target_onehot.zero_()
+    target_onehot.scatter_(1, target.view(-1, 1), 1)
 
+    cls_weight = (target_onehot.sum(dim=0) + eps).pow(-1)
+    weights = torch.mm(target_onehot, cls_weight.t())
     weights /= num_classes
-    return weights.data
+    return weights
 
 
 # Feed-Forward Neural Network Model (N hidden layer)
