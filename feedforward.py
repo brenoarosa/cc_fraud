@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torch.autograd import Variable
 import os
+from tensorboard import TBLogger
 
 batch_size = 2**10
 learning_rate = 0.001
@@ -16,6 +17,9 @@ X_train = torch.load("./data/X_train.p")
 y_train = torch.load("./data/y_train.p")
 X_test = torch.load("./data/X_test.p")
 y_test = torch.load("./data/y_test.p")
+
+log_path = "./log/ff_50_50_50_adam_1e-3"
+logger = TBLogger(log_path)
 
 # MNIST Dataset
 train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
@@ -98,9 +102,11 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 loss_func = nn.functional.binary_cross_entropy
 
 # Train the Model
+step = 0
 for epoch in range(num_epochs):
     for i, (X, y) in enumerate(train_loader):
-        y = y.type(torch.FloatTensor)
+        step += 1
+        y = y.float()
         # Convert torch tensor to Variable
         X = Variable(X)
         y = Variable(y)
@@ -115,15 +121,22 @@ for epoch in range(num_epochs):
         loss.backward()
         optimizer.step()
 
+        info = {
+            'loss': loss.data[0]
+        }
 
-    confusion = torch.zeros([2, 2]).type(torch.LongTensor)
+        for key, value in info.items():
+            logger.scalar_summary(key, value, step)
+
+
+    confusion = torch.zeros([2, 2]).long()
     for i, (X, y) in enumerate(test_loader):
-        y = y.type(torch.LongTensor)
+        y = y.long()
         X = Variable(X)
         y = Variable(y)
 
         output = model(X)
-        pred = (output.data > .5).type(torch.LongTensor)
+        pred = (output.data > .5).long()
 
         pred_correct = (pred == y.data)
         pred_wrong = (pred != y.data)
