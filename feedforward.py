@@ -56,6 +56,9 @@ def get_loss_weights(target, num_classes=2, eps=1e-08):
 
     cls_weight = (target_onehot.sum(dim=0) + eps).pow(-1)
     weights = torch.mm(target_onehot, cls_weight.t())
+
+    # count classes present in target
+    num_classes = (cls_weight <= 1).float().sum()
     weights /= num_classes
     return weights
 
